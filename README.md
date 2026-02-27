@@ -19,6 +19,7 @@ The planet file used here (`planet-260226_0301.osm.pbf`, generated 2026-02-26) i
 | PostgreSQL | 17.5 | `D:\Softwares\pg\` |
 | PostGIS | 3.5.3 | (extension, bundled with PostgreSQL) |
 | osm2pgsql | 2.2.0 | `D:\Softwares\osm2pgsql-bin\` |
+| GDAL / ogr2ogr | 3.11.3 | `D:\Softwares\osgeo\bin\` (OSGeo4W) |
 
 ---
 
@@ -28,9 +29,13 @@ The planet file used here (`planet-260226_0301.osm.pbf`, generated 2026-02-26) i
 historical-map-data/
 ├── data/                        # Planet / extract files — gitignored, not in version control
 │   └── planet-260226_0301.osm.pbf
+├── output/                      # Generated GeoJSON exports — gitignored
+│   └── countries_<year>.geojson
 ├── ohm-flex.lua                 # osm2pgsql flex output style
 ├── post-import.sql              # Post-import indexes, functions, generated columns
-└── README.md                   # This file
+├── query-countries.sh           # Export country boundaries for a single year → GeoJSON
+├── batch-export-countries.sh    # Batch wrapper: export a range of years in parallel
+└── README.md                    # This file
 ```
 
 ### `ohm-flex.lua`
@@ -50,6 +55,16 @@ Runs once after the osm2pgsql import. Adds:
 1. **`ohm_year(text) → integer`** — an `IMMUTABLE` function that parses OHM date strings to a signed integer year (negative = BCE).
 2. **`start_year` / `end_year`** — stored generated columns on all four tables, computed from `ohm_year()`. These are indexable and make temporal queries cheap.
 3. **Indexes** — see [Index summary](#index-summary) below.
+
+### `query-countries.sh`
+
+Queries `ohm_polygons` for features with `admin_level=2` (sovereign country boundaries) that were active in a given year, then exports them as a RFC 7946-compliant GeoJSON file via `ogr2ogr`. All original OHM tags are preserved as a nested JSON object in each feature's `tags` property.
+
+Output is written to `output/countries_<year>.geojson`.
+
+### `batch-export-countries.sh`
+
+Wraps `query-countries.sh` to export a range of years in parallel using `xargs -P`. Already-exported years are automatically detected and skipped, making interrupted runs safely resumable.
 
 ---
 
@@ -275,6 +290,86 @@ Of the 10,016,657 total features:
 - The bulk of features (especially nodes used purely as way geometry) carry no temporal tags at all
 
 The realistic date span of meaningfully dated features is roughly **5000 BCE to 2100 CE**. A small number of features contain clearly erroneous dates far outside this range; `ohm_year()` will parse them faithfully, so filter with `WHERE start_year BETWEEN -5000 AND 2100` when you need a clean temporal window.
+
+---
+
+## Exporting country boundaries to GeoJSON
+
+Country boundaries (`admin_level=2`) can be exported to GeoJSON using the two shell scripts. Both require `ogr2ogr` from OSGeo4W and a running PostgreSQL instance with the `ohm` database.
+
+### Single year — `query-countries.sh`
+
+```bash
+bash query-countries.sh <year>
+```
+
+```bash
+bash query-countries.sh 1850     # 1850 CE → output/countries_1850.geojson
+bash query-countries.sh -500     # 500 BCE → output/countries_-500.geojson
+```
+
+The script:
+1. Counts matching features and exits early if none are found.
+2. Runs `ogr2ogr` against PostGIS, projecting the query result directly to GeoJSON.
+3. Writes `output/countries_<year>.geojson`.
+
+### Batch export — `batch-export-countries.sh`
+
+```bash
+bash batch-export-countries.sh [START_YEAR [END_YEAR [WORKERS]]]
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `START_YEAR` | `1900` | First year to export |
+| `END_YEAR` | current year | Last year to export (inclusive) |
+| `WORKERS` | `4` | Number of parallel `ogr2ogr` jobs |
+
+```bash
+bash batch-export-countries.sh                  # 1900 to present, 4 workers
+bash batch-export-countries.sh 1800             # 1800 to present
+bash batch-export-countries.sh 1900 1950        # specific range
+bash batch-export-countries.sh 1900 2026 8      # 8 parallel workers
+```
+
+Already-exported files are skipped automatically. The script reports a summary before starting and prints total elapsed time on completion.
+
+### Output GeoJSON structure
+
+Each feature in the output file has the following properties:
+
+| Property | Type | Description |
+|---|---|---|
+| `osm_id` | integer | OSM element ID (negative = from a relation) |
+| `name` | string | Feature name |
+| `start_date` | string | Raw OHM `start_date` tag value |
+| `end_date` | string | Raw OHM `end_date` tag value |
+| `start_year` | integer | Parsed start year (`ohm_year()`) |
+| `end_year` | integer | Parsed end year (`ohm_year()`) |
+| `tags` | object | All OHM tags as a nested JSON object |
+
+```json
+{
+  "type": "Feature",
+  "properties": {
+    "osm_id": -2848988,
+    "name": "Uruguay",
+    "start_date": "1828-08-28",
+    "end_date": "1851",
+    "start_year": 1828,
+    "end_year": 1851,
+    "tags": {
+      "name": "Uruguay",
+      "type": "boundary",
+      "admin_level": "2",
+      "ISO3166-1:alpha2": "UY",
+      "name:en": "Uruguay",
+      "..."  : "..."
+    }
+  },
+  "geometry": { "type": "MultiPolygon", "coordinates": [...] }
+}
+```
 
 ---
 
