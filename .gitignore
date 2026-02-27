@@ -1,6 +1,9 @@
 # Planet / extract data files — too large for version control
 data/
 
+# Generated GeoJSON exports
+output/
+
 # Common OSM working files
 *.osm
 *.osm.pbf
