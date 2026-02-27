@@ -1,0 +1,11 @@
+# Planet / extract data files — too large for version control
+data/
+
+# Common OSM working files
+*.osm
+*.osm.pbf
+*.osm.bz2
+*.osm.gz
+
+# osm2pgsql temporary / log files
+*.log
