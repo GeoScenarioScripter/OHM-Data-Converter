@@ -26,7 +26,8 @@ The planet file used here (`planet-260226_0301.osm.pbf`, generated 2026-02-26) i
 
 ```
 historical-map-data/
-├── planet-260226_0301.osm.pbf   # Source data (not in version control)
+├── data/                        # Planet / extract files — gitignored, not in version control
+│   └── planet-260226_0301.osm.pbf
 ├── ohm-flex.lua                 # osm2pgsql flex output style
 ├── post-import.sql              # Post-import indexes, functions, generated columns
 └── README.md                   # This file
@@ -84,7 +85,7 @@ PGPASSWORD=<password> "D:/Softwares/osm2pgsql-bin/osm2pgsql.exe" \
   --user=postgres \
   --number-processes=4 \
   --cache=2000 \
-  "D:/work/historical-map-data/planet-260226_0301.osm.pbf"
+  "D:/work/historical-map-data/data/planet-260226_0301.osm.pbf"
 ```
 
 **Flag notes:**
