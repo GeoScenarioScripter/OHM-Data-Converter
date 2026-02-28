@@ -7,4 +7,5 @@ requires-python = ">=3.12"
 dependencies = [
     "deep-translator>=1.11.4",
     "geopandas>=1.1.2",
+    "zhconv>=1.4.3",
 ]

@@ -5,7 +5,7 @@ Converts OHM country boundary GeoJSON files (one per year) to ESRI Shapefiles.
 
 Added fields per feature:
   oid      - sequential 1-based integer ID within each shapefile
-  title    - Chinese name (taken from tags, or machine-translated)
+  title    - Simplified Chinese name (from tags or machine-translated; Traditional converted via zhconv)
   title_en - English name (taken from tags, or falls back to 'name')
 
 Output:
@@ -25,6 +25,7 @@ from typing import Optional
 
 import geopandas as gpd
 import pandas as pd
+import zhconv
 from deep_translator import GoogleTranslator
 
 # ---------------------------------------------------------------------------
@@ -47,6 +48,14 @@ _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
 
 def has_chinese(text: Optional[str]) -> bool:
     return bool(_CJK_RE.search(text or ""))
+
+
+def to_simplified(text: Optional[str]) -> Optional[str]:
+    """Convert any Chinese text to Simplified Chinese (zh-Hans).
+    Passes non-Chinese and None through unchanged."""
+    if not text:
+        return text
+    return zhconv.convert(text, "zh-hans")
 
 # ---------------------------------------------------------------------------
 # Helpers: extract fields from a row's tags
@@ -78,18 +87,24 @@ def get_title_en(tags: dict, name: str) -> str:
 
 def get_title_zh(tags: dict, name: str) -> Optional[str]:
     """
-    Chinese name from tags, or None if not present.
-    Also returns name directly if it already contains Chinese characters.
-    Priority order: name:zh → name:zh-Hans → name:zh-Hant → name:zh-CN
-                    → name:zh-TW → name:zh-SG → name (if CJK)
+    Return a Simplified Chinese name from tags, or None if not present.
+
+    Tag priority (all results passed through to_simplified()):
+      1. name:zh-Hans  — explicitly Simplified
+      2. name:zh-CN    — Mainland China, Simplified
+      3. name:zh       — ambiguous (may be Trad or Simp), convert to be safe
+      4. name:zh-Hant  — explicitly Traditional → convert
+      5. name:zh-TW    — Taiwan Traditional → convert
+      6. name:zh-SG    — Singapore, usually Simplified but convert anyway
+      7. name field itself, if it contains CJK characters → convert
     """
-    for key in ("name:zh", "name:zh-Hans", "name:zh-Hant",
-                "name:zh-CN", "name:zh-TW", "name:zh-SG"):
+    for key in ("name:zh-Hans", "name:zh-CN", "name:zh",
+                "name:zh-Hant", "name:zh-TW", "name:zh-SG"):
         val = (tags.get(key) or "").strip()
         if val:
-            return val
+            return to_simplified(val)
     if has_chinese(name):
-        return name.strip()
+        return to_simplified(name.strip())
     return None
 
 # ---------------------------------------------------------------------------
@@ -176,7 +191,9 @@ def process_year(year: int) -> bool:
             titles.append(zh)
         else:
             en = row["title_en"]
-            titles.append(_cache.get(en, en))   # fallback: English name
+            # Google Translate targets zh-CN (already Simplified), but run
+            # through zhconv anyway for consistency.
+            titles.append(to_simplified(_cache.get(en, en)))
     gdf["title"] = titles
 
     # -- oid ----------------------------------------------------------------
