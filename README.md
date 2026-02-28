@@ -20,6 +20,7 @@ The planet file used here (`planet-260226_0301.osm.pbf`, generated 2026-02-26) i
 | PostGIS | 3.5.3 | (extension, bundled with PostgreSQL) |
 | osm2pgsql | 2.2.0 | `D:\Softwares\osm2pgsql-bin\` |
 | GDAL / ogr2ogr | 3.11.3 | `D:\Softwares\osgeo\bin\` (OSGeo4W) |
+| Python | 3.12 | via [uv](https://github.com/astral-sh/uv) |
 
 ---
 
@@ -29,8 +30,14 @@ The planet file used here (`planet-260226_0301.osm.pbf`, generated 2026-02-26) i
 historical-map-data/
 ├── data/                        # Planet / extract files — gitignored, not in version control
 │   └── planet-260226_0301.osm.pbf
-├── output/                      # Generated GeoJSON exports — gitignored
-│   └── countries_<year>.geojson
+├── output/                      # Generated exports — gitignored
+│   ├── countries_<year>.geojson # Per-year GeoJSON country boundaries
+│   └── shp/
+│       └── <year>/
+│           └── countries_<year>.shp  # Per-year ESRI Shapefiles (+ sidecar files)
+├── converter/                   # Python shapefile converter (uv project)
+│   ├── main.py                  # GeoJSON → Shapefile converter
+│   └── pyproject.toml
 ├── ohm-flex.lua                 # osm2pgsql flex output style
 ├── post-import.sql              # Post-import indexes, functions, generated columns
 ├── query-countries.sh           # Export country boundaries for a single year → GeoJSON
@@ -65,6 +72,12 @@ Output is written to `output/countries_<year>.geojson`.
 ### `batch-export-countries.sh`
 
 Wraps `query-countries.sh` to export a range of years in parallel using `xargs -P`. Already-exported years are automatically detected and skipped, making interrupted runs safely resumable.
+
+### `converter/main.py`
+
+Python 3.12 script (managed with [uv](https://github.com/astral-sh/uv)) that converts the per-year GeoJSON files produced by the export scripts into ESRI Shapefiles. Reads all GeoJSON files in one pass to collect names requiring translation, translates them in a single batched API call set, then writes one shapefile per year.
+
+Dependencies: `geopandas`, `deep-translator`, `zhconv`.
 
 ---
 
@@ -370,6 +383,61 @@ Each feature in the output file has the following properties:
   "geometry": { "type": "MultiPolygon", "coordinates": [...] }
 }
 ```
+
+---
+
+## Converting GeoJSON to Shapefiles
+
+`converter/main.py` converts the per-year GeoJSON country boundary files into ESRI Shapefiles with Chinese and English name fields.
+
+### Setup
+
+Dependencies are declared in `converter/pyproject.toml` and managed by [uv](https://github.com/astral-sh/uv). No manual `pip install` is needed.
+
+### Usage
+
+```bash
+cd converter
+
+uv run main.py                        # all years (1900–2026)
+uv run main.py --start 1950 --end 2000
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--start` | `1900` | First year to process |
+| `--end` | `2026` | Last year to process (inclusive) |
+
+### How it works
+
+The script runs in three phases:
+
+1. **Scan** — reads every `output/countries_<year>.geojson` file and collects the English names of all features that do not already have a Chinese tag.
+2. **Translate** — sends all unique untranslated names to Google Translate (free tier) in batches of 50, populating a shared cache. Each unique name is translated only once regardless of how many years it appears in.
+3. **Write** — for each year, writes `output/shp/<year>/countries_<year>.shp` (UTF-8, EPSG:4326).
+
+### Output shapefile fields
+
+| Field | Type | Description |
+|---|---|---|
+| `oid` | Integer | Sequential 1-based ID within each shapefile |
+| `title` | String | Simplified Chinese name (from tags or machine-translated; Traditional Chinese converted via `zhconv`) |
+| `title_en` | String | English name (from `name:en` tag, or falls back to `name`) |
+| `geometry` | Geometry | Polygon / MultiPolygon in WGS84 (EPSG:4326) |
+
+### Chinese name resolution
+
+The script looks for a Chinese name in the following tag order (all values are normalised to Simplified Chinese via `zhconv`):
+
+1. `name:zh-Hans` — explicitly Simplified
+2. `name:zh-CN` — Mainland China
+3. `name:zh` — ambiguous; converted to be safe
+4. `name:zh-Hant` — explicitly Traditional → converted
+5. `name:zh-TW` — Taiwan Traditional → converted
+6. `name:zh-SG` — Singapore (usually Simplified; converted anyway)
+7. `name` field itself, if it contains CJK characters → converted
+
+If none of the above yield a Chinese name, the English name is sent to Google Translate (target: `zh-CN`).
 
 ---
 
